@@ -37,7 +37,7 @@ declare -A USER_DATA
 declare -A PACKAGE_DATA
 
 # Ensure dependencies are available
-REQUIRED_CMDS=("jq" "ps")
+REQUIRED_CMDS=("jq" "ps" "nproc")
 for cmd in "${REQUIRED_CMDS[@]}"; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: Required command '$cmd' is not installed." >&2
