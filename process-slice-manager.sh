@@ -89,7 +89,12 @@ setup_cgroup_v2_slice() {
 
     # Set CPU limits in the tasks directory
     if [[ "$cpu_quota" != "unlimited" && "$cpu_period" != "unlimited" ]]; then
-       # Convert period to microseconds based on unit
+        # Get number of CPU cores
+        local cpu_cores
+        cpu_cores=$(nproc)
+        log "INFO" "Detected $cpu_cores CPU cores"
+
+        # Convert period to microseconds based on unit
         local period_us
         if [[ "$cpu_period" =~ ms$ ]]; then
             # Convert ms to microseconds
@@ -105,21 +110,34 @@ setup_cgroup_v2_slice() {
             period_us=1000000
         fi
 
+        # Validate period boundaries
         # maximum period allowed is 1 second (1000000 µs)
         if (( period_us > 1000000 )); then
+            log "WARN" "Period adjusted to maximum value (1s)"
             period_us=1000000
         fi
-
         # minimum period allowed is 100ms (100000 µs)
         if (( period_us < 100000 )); then
+            log "WARN" "Period adjusted to minimum value (100ms)"
             period_us=100000
         fi
 
+        # Calculate quota for all cores
         cpu_quota=${cpu_quota//%/}
-        local quota_us=$((cpu_quota * 1000))
+        local single_core_quota=$((period_us * cpu_quota / 100))
+        local total_quota=$((single_core_quota * cpu_cores))
 
-        log "INFO" "Set CPU quota: ${quota_us}us period: ${period_us}us for $package"
-        echo "$quota_us $period_us" > "$tasks_dir/cpu.max" || \
+        # Validate minimum quota
+        if ((total_quota < 1000)); then
+            log "WARN" "CPU quota adjusted to minimum value (1000us)"
+            total_quota=1000
+        fi
+
+        log "INFO" "Set period: ${period_us}us for $package"
+        log "INFO" "Set CPU quota per core: ${single_core_quota}us (${cpu_quota}%) for $package"
+        log "INFO" "Set total CPU quota for $cpu_cores cores: ${total_quota}us for $package"
+
+        echo "$total_quota $period_us" > "$tasks_dir/cpu.max" || \
             log "ERROR" "Failed to set CPU limits for $package"
     else
         log "INFO" "Set unlimited CPU for $package"
@@ -131,9 +149,14 @@ setup_cgroup_v2_slice() {
     if [[ "$mem_limit" != "unlimited" ]]; then
         local mem_bytes
         mem_bytes=$(convert_memory_limit "$mem_limit")
-        log "INFO" "Set memory limit: $mem_bytes bytes for $package"
-        echo "$mem_bytes" > "$tasks_dir/memory.max" || \
-            log "ERROR" "Failed to set memory limit for $package"
+        if [ $? -eq 0 ] && [ -n "$mem_bytes" ]; then
+            log "INFO" "Set memory limit: $mem_bytes bytes for $package"
+            echo "$mem_bytes" > "$tasks_dir/memory.max" || \
+                log "ERROR" "Failed to set memory limit for $package"
+        else
+            log "ERROR" "Invalid memory limit format: $mem_limit"
+            return 1
+        fi
     else
         log "INFO" "Set unlimited memory for $package"
         echo "max" > "$tasks_dir/memory.max" || \
@@ -144,9 +167,14 @@ setup_cgroup_v2_slice() {
     if [[ "$swap_limit" != "unlimited" && "$mem_limit" != "unlimited" ]]; then
         local swap_bytes
         swap_bytes=$(convert_memory_limit "$swap_limit")
-        log "INFO" "Set swap limit: $swap_bytes bytes for $package"
-        echo "$swap_bytes" > "$tasks_dir/memory.swap.max" || \
-            log "ERROR" "Failed to set swap limit for $package"
+        if [ $? -eq 0 ] && [ -n "$swap_bytes" ]; then
+            log "INFO" "Set swap limit: $swap_bytes bytes for $package"
+            echo "$swap_bytes" > "$tasks_dir/memory.swap.max" || \
+                log "ERROR" "Failed to set swap limit for $package"
+        else
+            log "ERROR" "Invalid swap limit format: $swap_limit"
+            return 1
+        fi
     else
         log "INFO" "Set unlimited swap for $package"
         echo "max" > "$tasks_dir/memory.swap.max" || \
