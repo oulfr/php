@@ -4,6 +4,8 @@ After=network.target hestia.service
 Requires=hestia.service
 
 [Service]
+User=root
+Group=root
 Type=simple
 ExecStart=/usr/local/bin/process-slice-manager.sh start
 ExecStop=/usr/local/bin/process-slice-manager.sh stop
