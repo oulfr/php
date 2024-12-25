@@ -19,7 +19,7 @@ check_cgroup_version() {
         # Enable controllers in root group
         echo "+cpu" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable cpu controller in cgroup v2"
         #echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable cpuset controller in cgroup v2"
-        echo "+io" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable io controller in cgroup v2"
+        #echo "+io" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable io controller in cgroup v2"
         echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable memory controller in cgroup v2"
         
         local available_controllers
@@ -87,8 +87,8 @@ setup_cgroup_v2_slice() {
         log "ERROR" "Failed to enable cpu controller in $package"
     #echo "+cpuset" > "$package_dir/cgroup.subtree_control" || \
     #    log "ERROR" "Failed to enable cpuset controller in $package"
-    echo "+io" > "$package_dir/cgroup.subtree_control" || \
-        log "ERROR" "Failed to enable io controller in $package"
+    #echo "+io" > "$package_dir/cgroup.subtree_control" || \
+    #    log "ERROR" "Failed to enable io controller in $package"
     echo "+memory" > "$package_dir/cgroup.subtree_control" || \
         log "ERROR" "Failed to enable memory controller in $package"
         
