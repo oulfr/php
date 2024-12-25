@@ -1,6 +1,13 @@
 # Process Slice Manager
 
-This repository contains a service for managing process slices and monitoring them via systemd. It allows for easy package changes, process management, and error monitoring.
+This repository contains a service for managing process slices and monitoring them via systemd for Hestia CP Package. It allows for easy package changes, process management, and error monitoring.
+
+## Hestia CP Package
+
+1. Activate the "Limit System Resources" plugin in Hestia CP plugins.
+2. Create a new package or edit an existing package.
+3. In System Resources of the package in CPU Quota, specify the percentage limitation. If the system has 6 cores and you want to allocate, for example, 2.5 cores to this package group, you must specify 250% in the setting.
+4. For CPU Quota Period, specify a period between 100ms and 1s.
 
 ## Installation
 

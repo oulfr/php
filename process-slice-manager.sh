@@ -3,6 +3,7 @@
 # Configuration
 PIDFILE="/var/run/process-slice-manager.pid"
 LOG_FILE="/var/log/process-slice-manager.log"
+LOG_MAX_SIZE=$((5 * 1024 * 1024))  # 5MB in bytes
 CGROUP_V1_CPU="/sys/fs/cgroup/cpu"
 CGROUP_V1_MEMORY="/sys/fs/cgroup/memory"
 CGROUP_V2_BASE="/sys/fs/cgroup"
@@ -17,7 +18,10 @@ check_cgroup_version() {
         CGROUP_VERSION=2
         
         # Enable controllers in root group
-        echo "+cpu +io +memory" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable controllers in cgroup v2"
+        echo "+cpu" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable cpu controller in cgroup v2"
+        echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable cpuset controller in cgroup v2"
+        echo "+io" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable io controller in cgroup v2"
+        echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable memory controller in cgroup v2"
         
         local available_controllers
         available_controllers=$(cat /sys/fs/cgroup/cgroup.controllers)
@@ -45,10 +49,37 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
     fi
 done
 
+# Check and rotate log file if needed
+check_log_rotation() {
+    if [[ ! -f "$LOG_FILE" ]]; then
+        touch "$LOG_FILE"
+        chmod 640 "$LOG_FILE"
+        return
+    fi
+
+    local rotate=0
+    
+    # Check size
+    local size
+    size=$(stat -c%s "$LOG_FILE" 2>/dev/null)
+    if [[ $size -gt $LOG_MAX_SIZE ]]; then
+        rotate=1
+    fi
+
+    # Rotate if needed
+    if [[ $rotate -eq 1 ]]; then
+        true > "$LOG_FILE"
+        touch "$LOG_FILE"  # Updating file creation time
+        chmod 640 "$LOG_FILE"
+        log "INFO" "Log file rotated due to size"
+    fi
+}
+
 # Logging function with levels
 log() {
     local level="$1"
     local message="$2"
+    check_log_rotation
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [$level] $message" >> "$LOG_FILE"
 }
 
@@ -80,16 +111,51 @@ setup_cgroup_v2_slice() {
     mkdir -p "$package_dir" || { log "ERROR" "Failed to create package directory for $package"; return 1; }
 
     # Enable controllers in package directory
-    echo "+cpu +io +memory" > "$package_dir/cgroup.subtree_control" || \
-        log "ERROR" "Failed to enable controllers in $package"
+    echo "+cpu" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable cpu controller in $package"
+    echo "+cpuset" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable cpuset controller in $package"
+    echo "+io" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable io controller in $package"
+    echo "+memory" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable memory controller in $package"
 
     # Create and setup the tasks directory
     local tasks_dir="$package_dir/tasks"
     mkdir -p "$tasks_dir" || { log "ERROR" "Failed to create tasks directory for $package"; return 1; }
 
+    local cpu_cores=$(nproc)
+
+    # Cores to use
+    if [[ "$cpu_quota" != "unlimited" ]]; then
+        cpu_quota=${cpu_quota//%/}
+        cores_to_use=$(echo "scale=0; ($cpu_quota + 99) / 100" | bc)  # Round upwards
+        if (( cores_to_use > cpu_cores )); then
+            cores_to_use=$cpu_cores  # Limit to available number of cores
+        fi
+    else
+        cores_to_use=$cpu_cores
+    fi
+
+    log "INFO" "Determined $cores_to_use cores out of total $cpu_cores CPU cores from CPU quota ${cpu_quota}% for $package"
+
+    # Set cpuset.cpus depending on cores_to_use
+    if (( cores_to_use == 1 )); then
+        local random_core=$(shuf -i 0-$((cores_to_use - 1)) -n 1)
+        log "INFO" "Set cpuset.cpus: $random_core for $package"
+        echo "$random_core" > "$package_dir/tasks/cpuset.cpus" || \
+            log "ERROR" "Failed to set cpuset.cpus for $package"
+    else
+       local random_cores=$(shuf -i 0-$((cpu_cores - 1)) -n "$cores_to_use" | sort -n | tr '\n' ',' | sed 's/,$//')
+       log "INFO" "Set cpuset.cpus: $random_cores for $package"
+    echo "$random_cores" > "$package_dir/tasks/cpuset.cpus" || \
+        log "ERROR" "Failed to set cpuset.cpus for $package"
+    fi
+
     # Set CPU limits in the tasks directory
     if [[ "$cpu_quota" != "unlimited" && "$cpu_period" != "unlimited" ]]; then
-       # Convert period to microseconds based on unit
+
+        # Convert period to microseconds based on unit
         local period_us
         if [[ "$cpu_period" =~ ms$ ]]; then
             # Convert ms to microseconds
@@ -105,20 +171,31 @@ setup_cgroup_v2_slice() {
             period_us=1000000
         fi
 
+        # Validate period boundaries
         # maximum period allowed is 1 second (1000000 µs)
         if (( period_us > 1000000 )); then
+            log "WARN" "Period adjusted to maximum value (1s)"
             period_us=1000000
         fi
-
         # minimum period allowed is 100ms (100000 µs)
         if (( period_us < 100000 )); then
+            log "WARN" "Period adjusted to minimum value (100ms)"
             period_us=100000
         fi
 
+        # Calculate quota for all cores
         cpu_quota=${cpu_quota//%/}
-        local quota_us=$((cpu_quota * 1000))
+        local quota_us=$((period_us * cpu_quota / 100))
 
-        log "INFO" "Set CPU quota: ${quota_us}us period: ${period_us}us for $package"
+        # Validate minimum quota
+        if ((quota_us < 1000)); then
+            log "WARN" "CPU quota adjusted to minimum value (1000us)"
+            quota_us=1000
+        fi
+
+        log "INFO" "Set CPU quota: ${quota_us}us (${cpu_quota}%) for $package"
+        log "INFO" "Set period: ${period_us}us for $package"
+
         echo "$quota_us $period_us" > "$tasks_dir/cpu.max" || \
             log "ERROR" "Failed to set CPU limits for $package"
     else
@@ -131,9 +208,14 @@ setup_cgroup_v2_slice() {
     if [[ "$mem_limit" != "unlimited" ]]; then
         local mem_bytes
         mem_bytes=$(convert_memory_limit "$mem_limit")
-        log "INFO" "Set memory limit: $mem_bytes bytes for $package"
-        echo "$mem_bytes" > "$tasks_dir/memory.max" || \
-            log "ERROR" "Failed to set memory limit for $package"
+        if [ $? -eq 0 ] && [ -n "$mem_bytes" ]; then
+            log "INFO" "Set memory limit: $mem_bytes bytes for $package"
+            echo "$mem_bytes" > "$tasks_dir/memory.max" || \
+                log "ERROR" "Failed to set memory limit for $package"
+        else
+            log "ERROR" "Invalid memory limit format: $mem_limit"
+            return 1
+        fi
     else
         log "INFO" "Set unlimited memory for $package"
         echo "max" > "$tasks_dir/memory.max" || \
@@ -144,9 +226,14 @@ setup_cgroup_v2_slice() {
     if [[ "$swap_limit" != "unlimited" && "$mem_limit" != "unlimited" ]]; then
         local swap_bytes
         swap_bytes=$(convert_memory_limit "$swap_limit")
-        log "INFO" "Set swap limit: $swap_bytes bytes for $package"
-        echo "$swap_bytes" > "$tasks_dir/memory.swap.max" || \
-            log "ERROR" "Failed to set swap limit for $package"
+        if [ $? -eq 0 ] && [ -n "$swap_bytes" ]; then
+            log "INFO" "Set swap limit: $swap_bytes bytes for $package"
+            echo "$swap_bytes" > "$tasks_dir/memory.swap.max" || \
+                log "ERROR" "Failed to set swap limit for $package"
+        else
+            log "ERROR" "Invalid swap limit format: $swap_limit"
+            return 1
+        fi
     else
         log "INFO" "Set unlimited swap for $package"
         echo "max" > "$tasks_dir/memory.swap.max" || \
