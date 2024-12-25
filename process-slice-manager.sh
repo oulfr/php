@@ -17,7 +17,10 @@ check_cgroup_version() {
         CGROUP_VERSION=2
         
         # Enable controllers in root group
-        echo "+cpu +io +memory" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable controllers in cgroup v2"
+        echo "+cpu" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable cpu controller in cgroup v2"
+        #echo "+cpuset" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable cpuset controller in cgroup v2"
+        echo "+io" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable io controller in cgroup v2"
+        echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control || log "ERROR" "Failed to enable memory controller in cgroup v2"
         
         local available_controllers
         available_controllers=$(cat /sys/fs/cgroup/cgroup.controllers)
@@ -80,9 +83,15 @@ setup_cgroup_v2_slice() {
     mkdir -p "$package_dir" || { log "ERROR" "Failed to create package directory for $package"; return 1; }
 
     # Enable controllers in package directory
-    echo "+cpu +io +memory" > "$package_dir/cgroup.subtree_control" || \
-        log "ERROR" "Failed to enable controllers in $package"
-
+    echo "+cpu" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable cpu controller in $package"
+    #echo "+cpuset" > "$package_dir/cgroup.subtree_control" || \
+    #    log "ERROR" "Failed to enable cpuset controller in $package"
+    echo "+io" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable io controller in $package"
+    echo "+memory" > "$package_dir/cgroup.subtree_control" || \
+        log "ERROR" "Failed to enable memory controller in $package"
+        
     # Create and setup the tasks directory
     local tasks_dir="$package_dir/tasks"
     mkdir -p "$tasks_dir" || { log "ERROR" "Failed to create tasks directory for $package"; return 1; }
@@ -116,7 +125,7 @@ setup_cgroup_v2_slice() {
         fi
 
         cpu_quota=${cpu_quota//%/}
-        local quota_us=$((cpu_quota * 1000))
+        local quota_us=$((cpu_quota * period_us / 100))
 
         log "INFO" "Set CPU quota: ${quota_us}us period: ${period_us}us for $package"
         echo "$quota_us $period_us" > "$tasks_dir/cpu.max" || \
